@@ -1,11 +1,14 @@
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-from tqdm import tqdm
+"""Script para realizar simulações de mortalidade em uma população, conforme uma tábua biométrica.
+Gerado pelo Claude IA - versão 0.4"""
+
 import os
 from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import time
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 class SimulacaoMortalidade:
     def __init__(self, arquivo_populacao, arquivo_tabuas):

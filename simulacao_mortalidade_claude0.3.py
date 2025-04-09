@@ -1,4 +1,5 @@
-"""Script ..."""
+"""Script para realizar simulações de mortalidade em uma população, conforme uma tábua biométrica.
+Gerado pelo Claude IA - versão 0.3"""
 
 import os
 from datetime import datetime
@@ -10,7 +11,6 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 
 class SimulacaoMortalidade:
-    """Módulo que faz a simulação"""
     def __init__(self, arquivo_populacao, arquivo_tabuas):
         # Carrega os dados iniciais
         self.populacao_original = pd.read_excel(arquivo_populacao)
@@ -26,6 +26,9 @@ class SimulacaoMortalidade:
 
         # Pré-processa os dados para melhor desempenho
         self.otimizar_estruturas_dados()
+
+        # Calcula os óbitos esperados (determinísticos)
+        self.calcular_obitos_esperados()
 
     def verificar_dados(self):
         """Verifica se os dados de entrada estão completos e consistentes"""
@@ -54,6 +57,85 @@ class SimulacaoMortalidade:
             idade = int(row['idade'])
             self.prob_morte_fem[idade] = row['prob_morte_fem']
             self.prob_morte_masc[idade] = row['prob_morte_masc']
+
+    def calcular_obitos_esperados(self):
+        """Calcula os óbitos esperados (determinísticos) para um período de 5 anos"""
+        # Arrays para armazenar os resultados
+        self.obitos_esperados_anuais = []
+
+        # Cópia da população inicial para fazer cálculos determinísticos
+        pop_fem = self.pop_fem_array.copy()
+        pop_masc = self.pop_masc_array.copy()
+
+        # Calcula para cada um dos 5 anos
+        for ano in range(1, 6):
+            # Calcula os óbitos esperados para cada idade
+            obitos_fem_esperados = np.zeros_like(pop_fem, dtype=float)
+            obitos_masc_esperados = np.zeros_like(pop_masc, dtype=float)
+
+            for idade in range(self.idade_maxima + 1):
+                # Calcula os óbitos esperados (determinístico - valor médio)
+                obitos_fem_esperados[idade] = pop_fem[idade] * self.prob_morte_fem[idade]
+                obitos_masc_esperados[idade] = pop_masc[idade] * self.prob_morte_masc[idade]
+
+            # Total de óbitos esperados para este ano
+            total_obitos_esperados = {
+                'ano': ano,
+                'total': np.sum(obitos_fem_esperados) + np.sum(obitos_masc_esperados),
+                'feminino': np.sum(obitos_fem_esperados),
+                'masculino': np.sum(obitos_masc_esperados),
+                'por_idade_fem': obitos_fem_esperados.copy(),
+                'por_idade_masc': obitos_masc_esperados.copy()
+            }
+
+            self.obitos_esperados_anuais.append(total_obitos_esperados)
+
+            # Atualiza a população para o próximo ano
+            pop_fem = pop_fem - obitos_fem_esperados
+            pop_masc = pop_masc - obitos_masc_esperados
+
+            # Garante que não haja valores negativos
+            pop_fem = np.maximum(0, pop_fem)
+            pop_masc = np.maximum(0, pop_masc)
+
+            # Envelhecimento para o próximo ano
+            if ano < 5:  # Não precisamos envelhecer após o 5º ano
+                pop_fem[1:] = pop_fem[:-1]
+                pop_fem[0] = 0
+
+                pop_masc[1:] = pop_masc[:-1]
+                pop_masc[0] = 0
+
+    def get_obitos_esperados_df(self):
+        """Retorna um DataFrame com os óbitos esperados por ano"""
+        dados = []
+        for item in self.obitos_esperados_anuais:
+            dados.append({
+                'ano': item['ano'],
+                'obitos_esperados_total': item['total'],
+                'obitos_esperados_feminino': item['feminino'],
+                'obitos_esperados_masculino': item['masculino']
+            })
+
+        return pd.DataFrame(dados)
+
+    def get_obitos_esperados_por_idade_df(self):
+        """Retorna um DataFrame com os óbitos esperados por idade e ano"""
+        dados = []
+
+        for ano in range(1, 6):
+            item = self.obitos_esperados_anuais[ano-1]
+
+            for idade in range(self.idade_maxima + 1):
+                dados.append({
+                    'ano': ano,
+                    'idade': idade,
+                    'obitos_esperados_feminino': item['por_idade_fem'][idade],
+                    'obitos_esperados_masculino': item['por_idade_masc'][idade],
+                    'obitos_esperados_total': item['por_idade_fem'][idade] + item['por_idade_masc'][idade]
+                })
+
+        return pd.DataFrame(dados)
 
     def simular_periodo(self, anos=5, seed=None):
         """Realiza uma simulação de mortalidade para um período de anos"""
@@ -251,11 +333,17 @@ class SimulacaoMortalidade:
 
         # Cria um writer do Excel
         with pd.ExcelWriter(nome_arquivo) as writer:
-            # Estatísticas anuais
+            # Estatísticas anuais das simulações
             resultados['estatisticas_anuais'].to_excel(writer, sheet_name='Estatisticas_Anuais', index=False)
 
+            # Dados de óbitos esperados (determinísticos)
+            self.get_obitos_esperados_df().to_excel(writer, sheet_name='Obitos_Esperados', index=False)
+
+            # Dados de óbitos esperados por idade (opcional)
+            self.get_obitos_esperados_por_idade_df().to_excel(writer, sheet_name='Obitos_Esperados_Idade', index=False)
+
             # Amostra dos dados acumulados (primeiras 1000 simulações)
-            amostra = resultados['acumulados'].head(100000)
+            amostra = resultados['acumulados'].head(1000)
             amostra.to_excel(writer, sheet_name='Amostra_Simulações', index=False)
 
             # Resumo de estatísticas acumuladas
@@ -268,13 +356,36 @@ class SimulacaoMortalidade:
             # Tábuas de mortalidade
             self.tabuas.to_excel(writer, sheet_name='Tabuas_Mortalidade', index=False)
 
+            # Comparação entre óbitos esperados e simulados
+            comparacao = pd.DataFrame({
+                'ano': resultados['estatisticas_anuais']['ano'],
+                'obitos_esperados': self.get_obitos_esperados_df()['obitos_esperados_total'],
+                'obitos_simulados_media': resultados['estatisticas_anuais']['media_total'],
+                'diferenca_absoluta': self.get_obitos_esperados_df()['obitos_esperados_total'] - resultados['estatisticas_anuais']['media_total'],
+                'diferenca_percentual': (self.get_obitos_esperados_df()['obitos_esperados_total'] - resultados['estatisticas_anuais']['media_total']) / self.get_obitos_esperados_df()['obitos_esperados_total'] * 100
+            })
+            comparacao.to_excel(writer, sheet_name='Comparacao_Esperado_Simulado', index=False)
+
         # Imprime também um relatório no console
         print("\n" + "="*50)
         print("RELATÓRIO DE SIMULAÇÃO DE MORTALIDADE")
         print("="*50)
 
-        print("\nEstatísticas de óbitos por ano:")
+        print("\nÓbitos esperados (determinísticos) por ano:")
+        print(self.get_obitos_esperados_df())
+
+        print("\nEstatísticas de óbitos simulados por ano:")
         print(resultados['estatisticas_anuais'][['ano', 'media_total', 'desvio_total', 'min_total', 'max_total']])
+
+        print("\nComparação entre óbitos esperados e simulados:")
+        comparacao = pd.DataFrame({
+            'ano': resultados['estatisticas_anuais']['ano'],
+            'obitos_esperados': self.get_obitos_esperados_df()['obitos_esperados_total'],
+            'obitos_simulados_media': resultados['estatisticas_anuais']['media_total'],
+            'diferenca_absoluta': self.get_obitos_esperados_df()['obitos_esperados_total'] - resultados['estatisticas_anuais']['media_total'],
+            'diferenca_percentual': (self.get_obitos_esperados_df()['obitos_esperados_total'] - resultados['estatisticas_anuais']['media_total']) / self.get_obitos_esperados_df()['obitos_esperados_total'] * 100
+        })
+        print(comparacao)
 
         print("\nEstatísticas acumuladas (todos os anos):")
         for chave, valor in resultados['estatisticas_acumuladas'].items():
@@ -288,28 +399,46 @@ class SimulacaoMortalidade:
         # Configura o estilo
         plt.style.use('ggplot')
 
-        # Figura 1: Óbitos médios por ano
-        fig, ax = plt.subplots(figsize=(10, 6))
+        # Figura 1: Óbitos médios por ano (simulado vs esperado)
+        fig, ax = plt.subplots(figsize=(12, 7))
 
         anos = resultados['estatisticas_anuais']['ano']
         obitos_media = resultados['estatisticas_anuais']['media_total']
         obitos_desvio = resultados['estatisticas_anuais']['desvio_total']
+        obitos_esperados = self.get_obitos_esperados_df()['obitos_esperados_total']
 
-        ax.bar(anos, obitos_media, yerr=obitos_desvio, capsize=5,
-               color='skyblue', edgecolor='blue', alpha=0.7)
+        # Cria um gráfico de barras agrupadas
+        bar_width = 0.35
+        posicao_1 = np.arange(len(anos))
+        posicao_2 = posicao_1 + bar_width
 
-        ax.set_title('Média de Óbitos por Ano (com desvio padrão)', fontsize=14)
+        # Barras para simulação
+        ax.bar(posicao_1, obitos_media, width=bar_width, yerr=obitos_desvio, capsize=5,
+               color='skyblue', edgecolor='blue', alpha=0.7, label='Óbitos Simulados (Média)')
+
+        # Barras para valores esperados
+        ax.bar(posicao_2, obitos_esperados, width=bar_width,
+               color='lightgreen', edgecolor='green', alpha=0.7, label='Óbitos Esperados (Determinísticos)')
+
+        ax.set_title('Comparação de Óbitos por Ano: Simulados vs Esperados', fontsize=14)
         ax.set_xlabel('Ano', fontsize=12)
         ax.set_ylabel('Quantidade de Óbitos', fontsize=12)
+        ax.set_xticks(posicao_1 + bar_width / 2)
+        ax.set_xticklabels(anos)
+        ax.legend()
         ax.grid(True, linestyle='--', alpha=0.7)
 
         # Adiciona valores sobre as barras
         for i, v in enumerate(obitos_media):
-            ax.text(anos[i], v + obitos_desvio[i] + 100, f'{v:.0f}',
-                    ha='center', fontsize=10, fontweight='bold')
+            ax.text(posicao_1[i], v + obitos_desvio[i] + 50, f'{v:.0f}',
+                    ha='center', fontsize=9, fontweight='bold')
+
+        for i, v in enumerate(obitos_esperados):
+            ax.text(posicao_2[i], v + 50, f'{v:.0f}',
+                    ha='center', fontsize=9, fontweight='bold')
 
         plt.tight_layout()
-        plt.savefig('obitos_por_ano.png')
+        plt.savefig('comparacao_obitos_ano.png')
 
         # Figura 2: Histograma de óbitos totais
         fig, ax = plt.subplots(figsize=(10, 6))
@@ -320,8 +449,13 @@ class SimulacaoMortalidade:
         media = resultados['estatisticas_acumuladas']['media_total']
         desvio = resultados['estatisticas_acumuladas']['desvio_total']
 
+        # Soma total dos óbitos esperados
+        total_esperado = self.get_obitos_esperados_df()['obitos_esperados_total'].sum()
+
         ax.axvline(media, color='red', linestyle='dashed', linewidth=2,
-                  label=f'Média: {media:.0f}')
+                  label=f'Média Simulada: {media:.0f}')
+        ax.axvline(total_esperado, color='blue', linestyle='dashed', linewidth=2,
+                  label=f'Total Esperado: {total_esperado:.0f}')
         ax.axvline(media + desvio, color='orange', linestyle='dotted', linewidth=2,
                   label=f'Desvio: {desvio:.0f}')
         ax.axvline(media - desvio, color='orange', linestyle='dotted', linewidth=2)
@@ -347,9 +481,17 @@ class SimulacaoMortalidade:
                   capprops=dict(color='blue'),
                   medianprops=dict(color='red'))
 
+        # Adiciona pontos para os valores esperados
+        total_esperado_fem = self.get_obitos_esperados_df()['obitos_esperados_feminino'].sum()
+        total_esperado_masc = self.get_obitos_esperados_df()['obitos_esperados_masculino'].sum()
+
+        ax.scatter([1, 2], [total_esperado_fem, total_esperado_masc],
+                  color='green', marker='*', s=200, label='Valores Esperados')
+
         ax.set_title('Comparação de Óbitos por Sexo (Total em 5 Anos)', fontsize=14)
         ax.set_ylabel('Total de Óbitos', fontsize=12)
         ax.grid(True, linestyle='--', alpha=0.7)
+        ax.legend()
 
         plt.tight_layout()
         plt.savefig('comparacao_obitos_por_sexo.png')
@@ -385,6 +527,12 @@ def main():
 
     # Instancia e executa a simulação
     simulador = SimulacaoMortalidade("populacao.xlsx", "tabuas.xlsx")
+
+    # Exibe os óbitos esperados (determinísticos)
+    print("\nÓbitos esperados (determinísticos) por ano:")
+    print(simulador.get_obitos_esperados_df())
+
+    # Executa as simulações
     resultados = simulador.executar_simulacoes(n_simulacoes, anos, n_processos)
 
     # Gera o relatório
