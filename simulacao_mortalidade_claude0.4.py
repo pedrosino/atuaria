@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 
 class SimulacaoMortalidade:
+    """Classe principal"""
     def __init__(self, arquivo_populacao, arquivo_tabuas):
         # Carrega os dados iniciais
         self.populacao_original = pd.read_excel(arquivo_populacao)
