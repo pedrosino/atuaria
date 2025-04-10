@@ -11,8 +11,6 @@ import pandas as pd
 NUMERO_SIMULACOES = int(input("Digite o número de simulações: ")) or 100
 NUMERO_ANOS = int(input("Digite o número de anos em cada simulação: ")) or 5
 
-#np.set_printoptions(linewidth=76)
-
 # Ler tábua de mortalidade do excel
 tabuas = pd.read_excel("tabuas.xlsx")
 
@@ -27,7 +25,7 @@ tamanho_populacao = len(idades)
 idade_maxima = tamanho_populacao - 1
 
 # Lê população do arquivo excel
-arq_pop = pd.read_excel("pop_pbd.xlsx")
+arq_pop = pd.read_excel("populacao.xlsx")
 
 # Salva as duas populações separadas
 populacao_feminina_original = arq_pop[arq_pop.columns[1]].to_numpy(dtype=int)
@@ -99,15 +97,11 @@ for sim in range(NUMERO_SIMULACOES):
         populacao_masc[idade_maxima] = 0
 
     if (sim+1)%(NUMERO_SIMULACOES/100) == 0:
-        print(f"Simulação {sim+1:4d} concluída.") # Feminina: {mortes_ano_fem[sim]}, masculina: {mortes_ano_masc[sim]}")
+        print(f"Simulação {sim+1:4d} concluída.")
 
 print(f"... Simulações finalizadas em {(time.time() - start_time)} segundos ...")
 
 # Prepara as variáveis para o excel
-df_pop = pd.DataFrame({
-    'Idade': idades,
-    'Feminina': populacao_feminina_original,
-    'Masculina': populacao_masculina_original}) 
 
 # Colunas para a planilha
 fem_cols = [f"Fem_Ano{i+1}" for i in range(NUMERO_ANOS)]
@@ -140,6 +134,18 @@ esperados_junto = np.hstack((
     total_esperados_fem, total_esperados_masc, total_esperados))
 df_esperados = pd.DataFrame(esperados_junto, columns=todas_cols)
 
+# Contadores
+unicos_fem, count_fem = np.unique_counts(total_mortes_fem)
+unicos_masc, count_masc = np.unique_counts(total_mortes_masc)
+unicos_geral, count_geral = np.unique_counts(total_mortes)
+
+df_fem = pd.DataFrame({"Fem_Unicos": unicos_fem, "Qtde_Fem": count_fem})
+df_masc = pd.DataFrame({"Masc_Unicos": unicos_masc, "Qtde_Masc": count_masc})
+df_geral = pd.DataFrame({"Geral_Unicos": unicos_geral, "Qtde_Geral": count_geral})
+
+df_contadores = pd.concat([df_fem, df_masc, df_geral], axis=1)
+
+# Estatísticas
 estatisticas_mortes = df_mortes.describe()
 estatisticas_esperados = df_esperados.describe()
 
@@ -149,12 +155,14 @@ arquivo = f"Simulação_{time.strftime('%Y%m%d-%H%M%S')}.xlsx"
 with pd.ExcelWriter(arquivo) as writer:
     # use to_excel function and specify the sheet_name and index
     # to store the dataframe in specified sheet
-    
-    df_pop.to_excel(writer, sheet_name="Populacao", index=False)
+
+    arq_pop.to_excel(writer, sheet_name="Populacao", index=False)
+    tabuas.to_excel(writer, sheet_name="Tábua", index=False)
     df_mortes.to_excel(writer, sheet_name="Mortes", index=False)
     df_esperados.to_excel(writer, sheet_name="Esperados", index=False)
     estatisticas_mortes.to_excel(writer, sheet_name="Estatisticas_Mortes")
     estatisticas_esperados.to_excel(writer, sheet_name="Estatisticas_Esperados")
+    df_contadores.to_excel(writer, sheet_name="Contadores", index=False)
 
 print(f"Resultados salvos no arquivo {arquivo}")
 print(f"...Tempo total: {(time.time() - start_time)} segundos ...")
