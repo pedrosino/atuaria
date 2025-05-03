@@ -4,21 +4,16 @@ comparando com uma tábua de mortalidade.
 Desenvolvido por Pedro Santos Guimarães - abril de 2025   """
 
 import time
-import math
-import logging
 import numpy as np
 import pandas as pd
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logging.info('Log simples')
 # Parâmetros da simulação
-TAMANHO_POPULACAO = 3000
-NUMERO_SIMULACOES = 100000
-IDADE_MINIMA = 40
-IDADE_MAXIMA = 80
-PROPORCAO_MASCULINO = 0.6
-
-np.set_printoptions(linewidth=76)
+TAMANHO_POPULACAO = int(input("Digite o tamanho da população desejada: ")) or 3000
+IDADE_MINIMA_GERAR = int(input("Digite a idade mínima: ")) or 40
+IDADE_MAXIMA_GERAR = int(input("Digite a idade máxima: ")) or 80
+PROPORCAO_MASCULINO = float(input("Digite a proporção de homens (usando ponto decimal): ")) or 0.6
+NUMERO_SIMULACOES = int(input("Digite o número de simulações: ")) or 1000
+NUMERO_ANOS = int(input("Digite o número de anos em cada simulação: ")) or 5
 
 '''
 =SEERRO(
@@ -43,124 +38,180 @@ tabuas = pd.read_excel("tabuas.xlsx")
 # Inicialmente estava usando apenas uma tábua para toda a população
 tabua = tabuas[tabuas.columns[1]].to_numpy()
 
-# Salva as duas tábuas na mesma variável - verificar se é o melhor
-# Talvez se não transpuser fique mais fácil?
-tabuas_juntas = tabuas[tabuas.columns[1:]].to_numpy().T
+# Salva as duas tábuas separadas
+tabua_fem = tabuas[tabuas.columns[1]].to_numpy()
+tabua_masc = tabuas[tabuas.columns[2]].to_numpy()
 
-#logging.info(tabuas_juntas)
+# Idades
+idades = tabuas[tabuas.columns[0]].to_numpy()
+
+tamanho_populacao = len(idades)
+idade_maxima = tamanho_populacao - 1
 
 ###populacao_original = np.random.randint(IDADE_MINIMA, IDADE_MAXIMA, TAMANHO_POPULACAO)
-populacao_idades = np.random.randint(IDADE_MINIMA, IDADE_MAXIMA, TAMANHO_POPULACAO)
-aleatorios_sexo = np.random.random(TAMANHO_POPULACAO)
-populacao_sexo = (aleatorios_sexo < PROPORCAO_MASCULINO).astype(int)
-populacao_original = [populacao_idades, populacao_sexo]
-print("População:")
-print(populacao_original)
-###esperado_original = tabua[populacao_original]
-esperado_original = tabuas_juntas[populacao_original[1], populacao_original[0]]
-total_esperado = esperado_original.sum()
-print(esperado_original)
-print(f"Esperados: {total_esperado}")
+populacao_idades = np.random.randint(IDADE_MINIMA_GERAR, IDADE_MAXIMA_GERAR+1, TAMANHO_POPULACAO)
+aleatorios_sexo = np.random.random(TAMANHO_POPULACAO) < PROPORCAO_MASCULINO
 
-desvio = math.sqrt(total_esperado)
-margem = desvio*4
-maximo = total_esperado + margem
-print(f"Máximo: {maximo}")
+populacao_feminina_original = np.zeros(116, dtype=int)
+populacao_masculina_original = np.zeros(116, dtype=int)
 
-esperados = np.zeros((NUMERO_SIMULACOES,), dtype=float)
+for idade, masc in zip(populacao_idades, aleatorios_sexo):
+    if masc:
+        populacao_masculina_original[idade] += 1
+    else:
+        populacao_feminina_original[idade] += 1
 
-mortes_ano = np.zeros((NUMERO_SIMULACOES,5), dtype=int)
+print(f"População inicial: {populacao_feminina_original.sum()} mulheres e " \
+      f"{populacao_masculina_original.sum()} homens (total " \
+      f"{populacao_feminina_original.sum() + populacao_masculina_original.sum()})")
 
-morreram = np.zeros((int(maximo)*5,), dtype=int)
+# Calcula esperados iniciais
+esperado_inicial_fem = populacao_feminina_original * tabua_fem
+esperado_inicial_masc = populacao_masculina_original * tabua_masc
 
-mortes = np.empty((5, TAMANHO_POPULACAO))
+esp_fem = esperado_inicial_fem.sum()
+esp_masc = esperado_inicial_masc.sum()
+total_esperado = esp_fem + esp_masc
 
-novos_esperados = np.empty((5, TAMANHO_POPULACAO))
+print("Esperados:")
+print(f"Feminina: {esp_fem:.4f}, masculina: {esp_masc:.4f}, total: {total_esperado:.4f}")
 
-input("Iniciar simulações")
+# Arrays para registrar os números por simulação e ano
+esperados_ano_fem = np.zeros((NUMERO_SIMULACOES, NUMERO_ANOS), dtype=float)
+esperados_ano_masc = np.zeros((NUMERO_SIMULACOES, NUMERO_ANOS), dtype=float)
+
+mortes_ano_fem = np.zeros((NUMERO_SIMULACOES, NUMERO_ANOS), dtype=int)
+mortes_ano_masc = np.zeros((NUMERO_SIMULACOES, NUMERO_ANOS), dtype=int)
+
+print("Iniciando simulações...")
 
 start_time = time.time()
 
-populacao = np.empty_like(populacao_original)
-esperado = np.empty_like(esperado_original)
+populacao_fem = np.empty_like(populacao_feminina_original)
+populacao_masc = np.empty_like(populacao_masculina_original)
 
-for pop in range(NUMERO_SIMULACOES):
-    populacao[:] = populacao_original #= populacao_original.copy()
-    esperado[:] = esperado_original #= esperado_original.copy()
+esperado_fem = np.empty_like(esperado_inicial_fem)
+esperado_masc = np.empty_like(esperado_inicial_masc)
 
-    total_pop = 0
+for sim in range(NUMERO_SIMULACOES):
+    # Copia populações originais
+    populacao_fem[:] = populacao_feminina_original.copy()
+    populacao_masc[:] = populacao_masculina_original.copy()
 
     for ano in range(5):
-        aleatorios = np.random.random(TAMANHO_POPULACAO)
+        # Calcula esperados
+        esperado_fem = populacao_fem * tabua_fem
+        esperado_masc = populacao_masc * tabua_masc
 
-        morreu = (aleatorios < esperado).astype(int)
-        #print(f"..Simulação {pop}, ano {ano}..")
-        #print("Sorteio:")
-        #print(aleatorios[-300:])
-        #print(f"Morreram {morreu.sum()}")
-        #print(morreu[-100:])
-        mortes[ano] = morreu
+        esperados_ano_fem[sim, ano] = esperado_fem.sum()
+        esperados_ano_masc[sim, ano] = esperado_masc.sum()
 
-        # adiciona 1 ano a cada pessoa
-        ###populacao = np.minimum(populacao +1, 116)
-        populacao[0] = np.minimum(populacao[0] + 1, 116)
+        # Simula as mortes em cada idade
+        morreram_fem = np.random.binomial(populacao_fem, tabua_fem)
+        morreram_masc = np.random.binomial(populacao_masc, tabua_masc)
 
-        #print(populacao[:][-100:])
+        mortes_ano_fem[sim, ano] = morreram_fem.sum()
+        mortes_ano_masc[sim, ano] = morreram_masc.sum()
 
-        # atualiza as probabilidades
-        ###esperado = tabua[populacao]
-        esperado = tabuas_juntas[populacao[1], populacao[0]] #tabua[populacao]
+        # Remove os que morreram
+        populacao_fem -= morreram_fem
+        populacao_masc -= morreram_masc
 
-        # as que morreram passam a ter probabilidade zero
-        esperado[morreu == 1] = 0
-        ###populacao[morreu == 1] = 116
-        populacao[0][morreu == 1] = 116
+        # Adiciona 1 ano a cada pessoa
+        populacao_fem = np.roll(populacao_fem, 1)
+        populacao_fem[0] = 0
+        populacao_fem[idade_maxima] = 0
 
-        novos_esperados[ano] = esperado
+        populacao_masc = np.roll(populacao_masc, 1)
+        populacao_masc[0] = 0
+        populacao_masc[idade_maxima] = 0
 
-        #print(f"Sobraram {np.count_nonzero(esperado)}")
-        #print(f"Novo esperado: {esperado.sum()}")
+    if (sim+1)%(NUMERO_SIMULACOES/100) == 0:
+        print(f"Simulação {sim+1:4d} concluída.")
 
-        #print("Ficou")
-        #print(esperado[-100:])
-        #input("...")
+print(f"... Simulações finalizadas em {(time.time() - start_time)} segundos ...")
 
-        total_ano = morreu.sum()
-        mortes_ano[pop][ano] = total_ano
-        total_pop += total_ano
+# Prepara as variáveis para o excel
 
-    #print(f"Simulação {pop+1:4d}. Real: {mortes_ano[pop]}, total {total_pop}")
+# Colunas para a planilha
+fem_cols = [f"Fem_Ano{i+1}" for i in range(NUMERO_ANOS)]
+masc_cols = [f"Masc_Ano{i+1}" for i in range(NUMERO_ANOS)]
+total_cols = [f"Total_Ano{i+1}" for i in range(NUMERO_ANOS)]
+soma_fem_col = ["Fem_Total"]
+soma_masc_col = ["Masc_Total"]
+soma_geral_col = ["Total_Geral"]
 
-    if (pop+1)%(NUMERO_SIMULACOES/100) == 0:
-        print(f"Simulação {pop+1:4d}. Real: {mortes_ano[pop]}, total {total_pop}")
-    #    input("Continuar...")
+# Junta arrays de mortes
+mortes_ano_total = mortes_ano_fem + mortes_ano_masc
+total_mortes_fem = mortes_ano_fem.sum(axis=1).reshape(-1, 1)
+total_mortes_masc = mortes_ano_masc.sum(axis=1).reshape(-1, 1)
+total_mortes = mortes_ano_total.sum(axis=1).reshape(-1, 1)
 
-    morreram[total_pop] += 1
+todas_cols = fem_cols + masc_cols + total_cols + soma_fem_col + soma_masc_col + soma_geral_col
+mortes_junto = np.hstack((
+    mortes_ano_fem, mortes_ano_masc, mortes_ano_total,
+    total_mortes_fem, total_mortes_masc, total_mortes))
+df_mortes = pd.DataFrame(mortes_junto, columns=todas_cols)
 
-print(morreram)
+# Junta arrays de esperados
+esperados_ano_total = esperados_ano_fem + esperados_ano_masc
+total_esperados_fem = esperados_ano_fem.sum(axis=1).reshape(-1, 1)
+total_esperados_masc = esperados_ano_masc.sum(axis=1).reshape(-1, 1)
+total_esperados = esperados_ano_total.sum(axis=1).reshape(-1, 1)
 
-arquivo = f"Pop_aleatoria_{time.strftime('%Y%m%d-%H%M%S')}.xlsx"
+esperados_junto = np.hstack((
+    esperados_ano_fem, esperados_ano_masc, esperados_ano_total,
+    total_esperados_fem, total_esperados_masc, total_esperados))
+df_esperados = pd.DataFrame(esperados_junto, columns=todas_cols)
+
+# Contadores
+unicos_fem, count_fem = np.unique_counts(total_mortes_fem)
+unicos_masc, count_masc = np.unique_counts(total_mortes_masc)
+unicos_geral, count_geral = np.unique_counts(total_mortes)
+
+df_fem = pd.DataFrame({"Fem_Unicos": unicos_fem, "Qtde_Fem": count_fem})
+df_masc = pd.DataFrame({"Masc_Unicos": unicos_masc, "Qtde_Masc": count_masc})
+df_geral = pd.DataFrame({"Geral_Unicos": unicos_geral, "Qtde_Geral": count_geral})
+
+df_contadores = pd.concat([df_fem, df_masc, df_geral], axis=1)
+
+# Estatísticas
+estatisticas_mortes = df_mortes.describe()
+estatisticas_esperados = df_esperados.describe()
+
+# População para salvar no excel
+#populacao = np.stack((
+#    idades,
+#    populacao_feminina_original,
+#    populacao_masculina_original
+#))
+#populacao = idades + populacao_feminina_original + populacao_masculina_original
+#print(populacao)
+#input("...")
+df_populacao = pd.DataFrame({
+    'Idade': idades,
+    'Feminino': populacao_feminina_original,
+    'Masculino': populacao_masculina_original
+})
+
+print("Deseja incluir no arquivo o número de ocorridos e esperados em cada ano? (Pode levar mais tempo para gerar)")
+incluir_tudo = input("Digite S para sim ou N para não: ").upper()
+
+arquivo = f"Simulação_aleatoria_{time.strftime('%Y%m%d-%H%M%S')}.xlsx"
 
 # create a excel writer object
 with pd.ExcelWriter(arquivo) as writer:
-
     # use to_excel function and specify the sheet_name and index
     # to store the dataframe in specified sheet
-    df_pop = pd.DataFrame({'Idade': populacao_original[0], 'Sexo': populacao_original[1], 'Esperado': esperado_original}) #populacao_original, columns=['Idade'])
-    df_pop.to_excel(writer, sheet_name="Populacao", index=False)
 
-    df_morreram = pd.DataFrame(morreram, columns=['Quantidade'])
-    df_coluna = df_morreram.reset_index()
-    df_coluna.columns = ['Ocorridos', 'Quantidade']
-    df_coluna.to_excel(writer, sheet_name="Morreram", index=False)
-
-    df_mortes = pd.DataFrame(mortes).T
-    df_mortes.columns=['Ano1','Ano2','Ano3','Ano4','Ano5']
-    df_mortes.to_excel(writer, sheet_name="Mortes", index=False)
-
-    df_esperados = pd.DataFrame(novos_esperados).T#, columns=['Ano1','Ano2','Ano3','Ano4','Ano5'])
-    df_esperados.columns=['Ano1','Ano2','Ano3','Ano4','Ano5']
-    df_esperados.to_excel(writer, sheet_name="Esperados", index=False)
+    df_populacao.to_excel(writer, sheet_name="Populacao", index=False)
+    tabuas.to_excel(writer, sheet_name="Tábua", index=False)
+    if incluir_tudo == 'S':
+        df_mortes.to_excel(writer, sheet_name="Mortes", index=False)
+        df_esperados.to_excel(writer, sheet_name="Esperados", index=False)
+    estatisticas_mortes.to_excel(writer, sheet_name="Estatisticas_Mortes")
+    estatisticas_esperados.to_excel(writer, sheet_name="Estatisticas_Esperados")
+    df_contadores.to_excel(writer, sheet_name="Contadores", index=False)
 
 print(f"Resultados salvos no arquivo {arquivo}")
-print(f"... {(time.time() - start_time)} segundos ...")
+print(f"...Tempo total: {(time.time() - start_time)} segundos ...")
