@@ -8,18 +8,18 @@ import numpy as np
 import pandas as pd
 
 # Parâmetros da simulação
-NUMERO_SIMULACOES = int(input("Digite o número de simulações: ")) or 100
+NUMERO_SIMULACOES = int(input("Digite o número de simulações: ")) or 1000
 NUMERO_ANOS = int(input("Digite o número de anos em cada simulação: ")) or 5
 
 # Ler tábua de mortalidade do excel
 tabuas = pd.read_excel("tabuas.xlsx")
 
-# Idades
-idades = tabuas[tabuas.columns[0]].to_numpy()
-
 # Salva as duas tábuas separadas
 tabua_fem = tabuas[tabuas.columns[1]].to_numpy()
 tabua_masc = tabuas[tabuas.columns[2]].to_numpy()
+
+# Idades
+idades = tabuas[tabuas.columns[0]].to_numpy()
 
 tamanho_populacao = len(idades)
 idade_maxima = tamanho_populacao - 1
@@ -149,6 +149,9 @@ df_contadores = pd.concat([df_fem, df_masc, df_geral], axis=1)
 estatisticas_mortes = df_mortes.describe()
 estatisticas_esperados = df_esperados.describe()
 
+print("Deseja incluir no arquivo o número de ocorridos e esperados em cada ano? (Pode levar mais tempo para gerar)")
+incluir_tudo = input("Digite S para sim ou N para não: ").upper()
+
 arquivo = f"Simulação_{time.strftime('%Y%m%d-%H%M%S')}.xlsx"
 
 # create a excel writer object
@@ -158,8 +161,9 @@ with pd.ExcelWriter(arquivo) as writer:
 
     arq_pop.to_excel(writer, sheet_name="Populacao", index=False)
     tabuas.to_excel(writer, sheet_name="Tábua", index=False)
-    df_mortes.to_excel(writer, sheet_name="Mortes", index=False)
-    df_esperados.to_excel(writer, sheet_name="Esperados", index=False)
+    if incluir_tudo == 'S':
+        df_mortes.to_excel(writer, sheet_name="Mortes", index=False)
+        df_esperados.to_excel(writer, sheet_name="Esperados", index=False)
     estatisticas_mortes.to_excel(writer, sheet_name="Estatisticas_Mortes")
     estatisticas_esperados.to_excel(writer, sheet_name="Estatisticas_Esperados")
     df_contadores.to_excel(writer, sheet_name="Contadores", index=False)
