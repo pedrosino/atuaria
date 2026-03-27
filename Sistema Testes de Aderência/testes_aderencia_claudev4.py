@@ -156,7 +156,10 @@ def carregar_populacao(conteudo: bytes, nome: str) -> pd.DataFrame | None:
             elif "exp"  in cl: rename[c] = "expostos"
             elif any(p in cl for p in ("ocor","obit","mort")): rename[c] = "ocorridos"
         df.rename(columns=rename, inplace=True)
-        df["sexo"] = df["sexo"].apply(_normalizar_sexo)
+        sexo_col = df["sexo"]
+        if isinstance(sexo_col, pd.DataFrame):
+            sexo_col = sexo_col.iloc[:, 0]
+        df["sexo"] = sexo_col.apply(_normalizar_sexo)
     else:
         # Formato wide novo
         rename = {}
@@ -222,7 +225,10 @@ def carregar_tabuas(conteudo: bytes, nome: str) -> pd.DataFrame | None:
             elif "idade" in cl or cl == "id": rename[c] = "idade"
             elif "qx" in cl:  rename[c] = "qx"
         df.rename(columns=rename, inplace=True)
-        df["sexo"] = df["sexo"].apply(_normalizar_sexo)
+        sexo_col = df["sexo"]
+        if isinstance(sexo_col, pd.DataFrame):
+            sexo_col = sexo_col.iloc[:, 0]
+        df["sexo"] = sexo_col.apply(_normalizar_sexo)
     else:
         # Formato wide novo
         col_idade = _find_col(df, ["idade","age","x"])
@@ -263,6 +269,9 @@ def carregar_tabuas(conteudo: bytes, nome: str) -> pd.DataFrame | None:
 
 
 def _normalizar_sexo(sexo_raw: object) -> str | None:
+    if isinstance(sexo_raw, pd.Series):
+        sexo_valid = sexo_raw.dropna()
+        sexo_raw = sexo_valid.iloc[0] if not sexo_valid.empty else np.nan
     if pd.isna(sexo_raw):
         return None
     sexo = str(sexo_raw).strip().upper()
@@ -655,11 +664,54 @@ def _fmt(v, decimais=4):
     return v
 
 
+def _adicionar_rankings_escores(df_resultados: pd.DataFrame) -> pd.DataFrame:
+    """Adiciona ranking e escore para χ² Stat e KS Stat (menor stat = melhor ajuste)."""
+    out = df_resultados.copy()
+    regras = [
+        ("χ² Stat", "Ranking χ²", "Escore χ²"),
+        ("KS Stat", "Ranking KS", "Escore KS"),
+    ]
+    for stat_col, rank_col, score_col in regras:
+        stats_col = pd.to_numeric(out[stat_col], errors="coerce")
+        ranking = stats_col.rank(method="min", ascending=True)
+        out[rank_col] = ranking.astype("Int64")
+
+        valid = stats_col.dropna()
+        if valid.empty:
+            out[score_col] = np.nan
+            continue
+
+        stat_min = valid.min()
+        stat_max = valid.max()
+        if np.isclose(stat_max, stat_min):
+            out[score_col] = np.where(stats_col.notna(), 1.0, np.nan)
+        else:
+            out[score_col] = (stat_max - stats_col) / (stat_max - stat_min)
+
+    return out
+
+
+def _ordenar_colunas_resumo_geral(df: pd.DataFrame) -> pd.DataFrame:
+    """Colunas na ordem desejada na aba Resumo Geral (ranking/escore após cada Stat)."""
+    preferida = [
+        "Tábua", "Sexo Tábua", "Sexo Pop.", "Fator qx",
+        "N Idades", "N Grupos χ²",
+        "Expostos", "Ocorridos", "Esperados", "Razão O/E",
+        "χ² Stat", "Ranking χ²", "Escore χ²", "χ² GL", "χ² p-valor", "χ² Crítico", "χ² Aprovado",
+        "KS Stat", "Ranking KS", "Escore KS", "KS p-valor", "KS Crítico", "KS Aprovado",
+        "Z Stat", "Z p-valor", "Z Crítico", "Z Aprovado", "Z Direção",
+    ]
+    existentes = [c for c in preferida if c in df.columns]
+    extras = [c for c in df.columns if c not in existentes]
+    return df[existentes + extras]
+
+
 def gerar_excel(
     resultados: pd.DataFrame,
     detalhes_grupos: dict,
     merged_detalhes: dict,
 ) -> bytes:
+    resultados = _adicionar_rankings_escores(resultados)
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
 
@@ -667,6 +719,7 @@ def gerar_excel(
         res = resultados.copy()
         for col in ("χ² Aprovado","KS Aprovado","Z Aprovado"):
             res[col] = res[col].apply(_ap_str)
+        res = _ordenar_colunas_resumo_geral(res)
         res.to_excel(writer, sheet_name="Resumo Geral", index=False)
 
         # ── Uma aba por tábua ────────────────────────────────────────────────
@@ -710,6 +763,10 @@ def gerar_excel(
                     rows_sheet.append({"A":"KS Stat","B":_fmt(r["KS Stat"]),
                                        "C":"KS p-valor","D":_fmt(r["KS p-valor"]),
                                        "E":"KS Aprovado","F":_ap_str(r["KS Aprovado"])})
+                    rows_sheet.append({"A":"Ranking χ²","B":_fmt(r["Ranking χ²"], 0),
+                                       "C":"Escore χ²","D":_fmt(r["Escore χ²"], 4),
+                                       "E":"Ranking KS","F":_fmt(r["Ranking KS"], 0),
+                                       "G":"Escore KS","H":_fmt(r["Escore KS"], 4)})
                     rows_sheet.append({"A":"Z Stat","B":_fmt(r["Z Stat"]),
                                        "C":"Z p-valor","D":_fmt(r["Z p-valor"]),
                                        "E":"Z Aprovado","F":_ap_str(r["Z Aprovado"]),
