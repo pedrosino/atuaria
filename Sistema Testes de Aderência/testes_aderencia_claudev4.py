@@ -8,7 +8,6 @@ import io
 import warnings
 
 import matplotlib
-matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import matplotlib.ticker as mticker
@@ -17,6 +16,7 @@ import pandas as pd
 import streamlit as st
 from scipy import stats
 from scipy.stats import chi2
+matplotlib.use("Agg")
 
 warnings.filterwarnings("ignore")
 
@@ -285,6 +285,7 @@ def _find_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def calcular_esperados(pop_df: pd.DataFrame, tabua_df: pd.DataFrame) -> pd.DataFrame:
+    """Calcula os esperados de acordo com a tábua de mortalidade e a população."""
     merged = pop_df.merge(tabua_df[["idade","qx"]], on="idade", how="left")
     merged["esperados"] = merged["expostos"] * merged["qx"]
     return merged
@@ -295,6 +296,7 @@ def calcular_esperados(pop_df: pd.DataFrame, tabua_df: pd.DataFrame) -> pd.DataF
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def agrupar_idades(df: pd.DataFrame, min_esp: float) -> pd.DataFrame:
+    """Agrupa as idades em grupos de acordo com o mínimo de esperados por grupo."""
     df = df.sort_values("idade").reset_index(drop=True)
     grupos, acc_o, acc_e, acc_n = [], 0.0, 0.0, 0.0
     idade_ini = float(df["idade"].iloc[0])
@@ -333,6 +335,7 @@ def agrupar_idades(df: pd.DataFrame, min_esp: float) -> pd.DataFrame:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def teste_qui_quadrado(df_merged, min_esp, alpha):
+    """Teste de Qui-quadrado para verificar a adequação da tábua de mortalidade."""
     df_v = df_merged.dropna(subset=["qx"])
     df_v = df_v[df_v["esperados"] > 0]
     if df_v.empty:
@@ -340,22 +343,23 @@ def teste_qui_quadrado(df_merged, min_esp, alpha):
     df_g = agrupar_idades(df_v, min_esp)
     if df_g.empty or len(df_g) < 2:
         return np.nan, np.nan, np.nan, None, len(df_g) if not df_g.empty else 0, df_g
-    O, E = df_g["ocorridos"].values, df_g["esperados"].values
+    ocorridos, esperados = df_g["ocorridos"].values, df_g["esperados"].values
     gl   = len(df_g) - 1
-    stat = float(np.sum((O - E)**2 / E))
+    stat = float(np.sum((ocorridos - esperados)**2 / esperados))
     pval = float(1 - chi2.cdf(stat, df=gl))
     crit = float(chi2.ppf(1 - alpha, df=gl))
     return stat, pval, crit, bool(stat <= crit), len(df_g), df_g
 
 
 def teste_ks(df_merged, alpha):
+    """Teste de Kolmogorov-Smirnov para verificar a adequação da tábua de mortalidade."""
     df_v = df_merged.dropna(subset=["qx"]).sort_values("idade")
-    O, E = df_v["ocorridos"].values.astype(float), df_v["esperados"].values.astype(float)
-    tot_o, tot_e = O.sum(), E.sum()
+    ocorridos, esperados = df_v["ocorridos"].values.astype(float), df_v["esperados"].values.astype(float)
+    tot_o, tot_e = ocorridos.sum(), esperados.sum()
     if tot_o == 0 or tot_e == 0:
         return np.nan, np.nan, np.nan, None
-    cdf_o = np.cumsum(O) / tot_o
-    cdf_e = np.cumsum(E) / tot_e
+    cdf_o = np.cumsum(ocorridos) / tot_o
+    cdf_e = np.cumsum(esperados) / tot_e
     stat  = float(np.max(np.abs(cdf_o - cdf_e)))
     n     = int(round(tot_o))
     crit  = float({0.10:1.22, 0.05:1.36, 0.01:1.63}.get(alpha, 1.36) / np.sqrt(n))
@@ -375,8 +379,8 @@ def teste_z_binomial(df_merged, alpha):
     var  = (df_v["expostos"] * q * (1 - q)).sum()
     if var <= 0:
         return np.nan, np.nan, np.nan, None, None
-    O_tot, E_tot = df_v["ocorridos"].sum(), df_v["esperados"].sum()
-    z    = float((O_tot - E_tot) / np.sqrt(var))
+    ocorridos_total, esperados_total = df_v["ocorridos"].sum(), df_v["esperados"].sum()
+    z    = float((ocorridos_total - esperados_total) / np.sqrt(var))
     pval = float(2 * (1 - stats.norm.cdf(abs(z))))
     crit = float(stats.norm.ppf(1 - alpha/2))
     return z, pval, crit, bool(abs(z) <= crit), (1 if z >= 0 else -1)
@@ -399,15 +403,15 @@ def _testar_merged(merged, min_esp, alpha_chi2, alpha_ks, alpha_z):
     ks, pks, cks, aks          = teste_ks(merged, alpha_ks)
     z,  pz,  cz,  az, z_dir    = teste_z_binomial(merged, alpha_z)
 
-    O_tot = merged["ocorridos"].sum()
-    E_tot = merged["esperados"].sum()
+    ocorridos_total = merged["ocorridos"].sum()
+    esperados_total = merged["esperados"].sum()
     row = {
         "N Idades":    int(merged["idade"].nunique()),
         "N Grupos χ²": int(n_g),
         "Expostos":    float(merged["expostos"].sum()),
-        "Ocorridos":   float(O_tot),
-        "Esperados":   float(E_tot),
-        "Razão O/E":   float(O_tot/E_tot) if E_tot > 0 else np.nan,
+        "Ocorridos":   float(ocorridos_total),
+        "Esperados":   float(esperados_total),
+        "Razão O/E":   float(ocorridos_total/esperados_total) if esperados_total > 0 else np.nan,
         "χ² Stat": q2, "χ² GL":      int(n_g-1) if n_g >= 2 else np.nan,
         "χ² p-valor": p2, "χ² Crítico": c2, "χ² Aprovado": a2,
         "KS Stat": ks, "KS p-valor": pks, "KS Crítico": cks, "KS Aprovado": aks,
@@ -496,29 +500,34 @@ PAL = {"obs":"#2563eb","esp":"#f59e0b","oe":"#10b981",
        "red":"#ef4444","grid":"#e2e8f0","bg":"#f8fafc"}
 
 def _style(ax, title="", xlabel="", ylabel=""):
+    """Estilo dos gráficos."""
     ax.set_facecolor(PAL["bg"])
     ax.figure.patch.set_facecolor("white")
     ax.grid(axis="y", color=PAL["grid"], linewidth=0.8, zorder=0)
     ax.spines[["top","right"]].set_visible(False)
     ax.spines[["left","bottom"]].set_color("#cbd5e1")
     ax.tick_params(colors="#475569", labelsize=8)
-    if title:  ax.set_title(title,  fontsize=9.5, fontweight="bold", color="#0f172a", pad=7)
-    if xlabel: ax.set_xlabel(xlabel, fontsize=8, color="#64748b")
-    if ylabel: ax.set_ylabel(ylabel, fontsize=8, color="#64748b")
+    if title:
+        ax.set_title(title,  fontsize=9.5, fontweight="bold", color="#0f172a", pad=7)
+    if xlabel:
+        ax.set_xlabel(xlabel, fontsize=8, color="#64748b")
+    if ylabel:
+        ax.set_ylabel(ylabel, fontsize=8, color="#64748b")
 
 
 def grafico_oe_por_idade(merged, nome_tabua, sxt, sxp):
+    """Gráfico de óbitos ocorridos e esperados por idade."""
     df = merged.dropna(subset=["qx"]).sort_values("idade")
     if df.empty: return None
     idades = df["idade"].astype(int).values
-    O = df["ocorridos"].values
-    E = df["esperados"].values
-    oe = np.where(E > 0, O/E, np.nan)
+    ocorridos = df["ocorridos"].values
+    esperados = df["esperados"].values
+    oe = np.where(esperados > 0, ocorridos/esperados, np.nan)
 
     fig, (ax1, ax2) = plt.subplots(2,1, figsize=(12,5.5),
         gridspec_kw={"height_ratios":[2.5,1],"hspace":0.35})
-    ax1.bar(idades, E, width=0.65, color=PAL["esp"], alpha=0.80, label="Esperados", zorder=2)
-    ax1.plot(idades, O, color=PAL["obs"], linewidth=2, marker="o",
+    ax1.bar(idades, esperados, width=0.65, color=PAL["esp"], alpha=0.80, label="Esperados", zorder=2)
+    ax1.plot(idades, ocorridos, color=PAL["obs"], linewidth=2, marker="o",
              markersize=3, label="Ocorridos", zorder=3)
     _style(ax1, title=f"Ocorridos vs Esperados — {nome_tabua} ({sxt}) × Pop. ({sxp})",
            ylabel="Nº de óbitos")
@@ -535,15 +544,18 @@ def grafico_oe_por_idade(merged, nome_tabua, sxt, sxp):
 
 
 def grafico_cdf(merged, nome_tabua, sxt, sxp):
+    """Gráfico de distribuição acumulada (CDF) dos óbitos e esperados."""
     df = merged.dropna(subset=["qx"]).sort_values("idade")
-    if df.empty: return None
-    O = df["ocorridos"].values.astype(float)
-    E = df["esperados"].values.astype(float)
-    tot_o, tot_e = O.sum(), E.sum()
-    if tot_o == 0 or tot_e == 0: return None
+    if df.empty:
+        return None
+    ocorridos = df["ocorridos"].values.astype(float)
+    esperados = df["esperados"].values.astype(float)
+    total_ocorridos, total_esperados = ocorridos.sum(), esperados.sum()
+    if total_ocorridos == 0 or total_esperados == 0:
+        return None
     idades = df["idade"].astype(int).values
-    cdf_o  = np.cumsum(O)/tot_o
-    cdf_e  = np.cumsum(E)/tot_e
+    cdf_o  = np.cumsum(ocorridos)/total_ocorridos
+    cdf_e  = np.cumsum(esperados)/total_esperados
     diff   = np.abs(cdf_o-cdf_e)
     im     = np.argmax(diff)
 
@@ -565,9 +577,10 @@ def grafico_cdf(merged, nome_tabua, sxt, sxp):
 
 
 def grafico_chi2_grupos(df_g, stat, crit, nome_tabua, sxt, sxp):
+    """Gráfico de contribuição ao χ² por grupo de idades."""
     if df_g is None or df_g.empty or len(df_g) < 2: return None
-    O, E   = df_g["ocorridos"].values, df_g["esperados"].values
-    contrib = np.where(E > 0, (O-E)**2/E, 0.0)
+    ocorridos, esperados   = df_g["ocorridos"].values, df_g["esperados"].values
+    contrib = np.where(esperados > 0, (ocorridos-esperados)**2/esperados, 0.0)
     limite  = crit/len(df_g)*2
     cores   = [PAL["red"] if c > limite else PAL["obs"] for c in contrib]
     fig, ax = plt.subplots(figsize=(12,4))
@@ -583,6 +596,7 @@ def grafico_chi2_grupos(df_g, stat, crit, nome_tabua, sxt, sxp):
 
 
 def grafico_ranking_oe(df_res: pd.DataFrame):
+    """Gráfico de ranking da razão O/E."""
     if df_res.empty: return None
     df     = df_res.copy().sort_values("Razão O/E")
     labels = df.apply(lambda r: f"{r['Tábua']} ({r['Sexo Tábua']}→{r['Sexo Pop.']})", axis=1)
@@ -604,6 +618,7 @@ def grafico_ranking_oe(df_res: pd.DataFrame):
 
 
 def grafico_heatmap_aprovacao(df_res: pd.DataFrame):
+    """Gráfico de mapa de aprovação dos testes."""
     if df_res.empty: return None
     testes = ["χ² Aprovado","KS Aprovado","Z Aprovado"]
     siglas = ["χ²","KS","Z"]
@@ -747,9 +762,11 @@ def gerar_excel(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def formatar_aprovado(val):
+    """Formatação de aprovação dos testes."""
     return "✅ Aprovado" if val is True else ("❌ Reprovado" if val is False else "—")
 
 def colorir_linha(row):
+    """Colorir linha da tabela de resultados."""
     vals = [v for v in [row.get("χ² Aprovado"), row.get("KS Aprovado"), row.get("Z Aprovado")]
             if v is not None and not (isinstance(v,float) and np.isnan(v))]
     if not vals:      return [""]*len(row)
@@ -899,30 +916,29 @@ with col_exp:
             '<div style="font-size:0.78rem;color:#64748b;margin-bottom:0.6rem;">'
             "Multiplica o qx de cada tábua×sexo por um fator individual antes de calcular os esperados."
             "</div>", unsafe_allow_html=True)
-        n_cols = 4
-        grid = st.columns(n_cols)
+        N_COLS = 4
+        grid = st.columns(N_COLS)
         for idx, (nome_t, sexo_t) in enumerate(combos_tabua):
-            chave = f"fator_{nome_t}_{sexo_t}"
-            with grid[idx % n_cols]:
+            CHAVE = f"fator_{nome_t}_{sexo_t}"
+            with grid[idx % N_COLS]:
                 fator = st.number_input(
                     f"{nome_t} ({sexo_t})",
                     min_value=0.10, max_value=5.00,
-                    value=float(st.session_state.get(chave, 1.00)),
-                    step=0.01, format="%.2f", key=chave)
+                    value=float(st.session_state.get(CHAVE, 1.00)),
+                    step=0.01, format="%.2f", key=CHAVE)
             fatores_agravo[(nome_t, sexo_t)] = fator
 
         ativos = {k:v for k,v in fatores_agravo.items() if abs(v-1.0)>0.005}
         if ativos:
             partes = []
             for (n,s), v in sorted(ativos.items()):
-                cor  = "#dc2626" if v>1 else "#2563eb"
-                sinal = "▲" if v>1 else "▼"
-                partes.append(f'<span style="color:{cor};font-weight:600;">'
-                              f'{sinal} {n} ({s}) × {v:.2f}</span>')
+                COR_HEX  = "#dc2626" if v>1 else "#2563eb"
+                SINAL_SETA = "▲" if v>1 else "▼"
+                partes.append(f'<span style="color:{COR_HEX};font-weight:600;">'
+                              f'{SINAL_SETA} {nome_t} ({sexo_t}) × {v:.2f}</span>')
             st.markdown(
                 '<div style="margin-top:0.4rem;font-size:0.8rem;line-height:2;">'
-                "Ativos: " + " &nbsp;|&nbsp; ".join(partes) + "</div>",
-                unsafe_allow_html=True)
+                "Ativos: " + " &nbsp;|&nbsp; ".join(partes) + "</div>", unsafe_allow_html=True)
 
 # ── Executar testes ───────────────────────────────────────────────────────────
 with st.spinner("Calculando testes de aderência..."):
@@ -982,16 +998,16 @@ for i, (_, row) in enumerate(res_exibir.iterrows()):
     ap   = [v for v in [row["χ² Aprovado"],row["KS Aprovado"],row["Z Aprovado"]]
             if v is not None and not (isinstance(v,float) and np.isnan(v))]
     n_ap = sum(bool(a) for a in ap)
-    cor  = "#16a34a" if n_ap==len(ap) else ("#d97706" if n_ap>0 else "#dc2626")
-    emo  = "✅" if n_ap==len(ap) else ("⚠️" if n_ap>0 else "❌")
+    COR  = "#16a34a" if n_ap==len(ap) else ("#d97706" if n_ap>0 else "#dc2626")
+    EMOJI  = "✅" if n_ap==len(ap) else ("⚠️" if n_ap>0 else "❌")
     ng   = int(row["N Grupos χ²"]) if not (isinstance(row["N Grupos χ²"],float) and np.isnan(row["N Grupos χ²"])) else "—"
     def _b(v): return "✅" if v is True else ("❌" if v is False else "—")
     with card_cols[i%4]:
         st.markdown(f"""
-        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-top:3px solid {cor};
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-top:3px solid {COR};
                     border-radius:8px;padding:0.8rem;margin-bottom:0.6rem;">
             <div style="font-weight:700;font-size:0.82rem;color:#0f172a;margin-bottom:0.2rem;">
-                {emo} {row['Tábua']}</div>
+                {EMOJI} {row['Tábua']}</div>
             <div style="font-size:0.7rem;color:#64748b;margin-bottom:0.4rem;">
                 Tábua {row['Sexo Tábua']} × Pop. {row['Sexo Pop.']}
                 &nbsp;|&nbsp; {ng} grupos χ²</div>
@@ -1014,32 +1030,32 @@ opcoes_combo = res_exibir.apply(
     lambda r: f"{r['Tábua']} ({r['Sexo Tábua']}) × Pop. ({r['Sexo Pop.']})", axis=1).tolist()
 
 if opcoes_combo:
-    sel_combo = st.selectbox("Combinação (tábua × população)", opcoes_combo, key="combo_sel")
-    row_combo = res_exibir.iloc[opcoes_combo.index(sel_combo)]
+    SEL_COMBO = st.selectbox("Combinação (tábua × população)", opcoes_combo, key="combo_sel")
+    ROW_COMBO = res_exibir.iloc[opcoes_combo.index(SEL_COMBO)]
 else:
-    sel_combo = None
-    row_combo = None
+    SEL_COMBO = None
+    ROW_COMBO = None
 
 tab_vis, tab_chi, tab_cdf, tab_rank = st.tabs([
     "📊 Ocorridos vs Esperados", "🔢 Grupos χ²", "📈 Curvas KS", "🏆 Ranking O/E"])
 
 with tab_vis:
-    if row_combo is not None:
-        mg = merged_detalhes.get((row_combo["Tábua"], row_combo["Sexo Tábua"], row_combo["Sexo Pop."]))
+    if ROW_COMBO is not None:
+        mg = merged_detalhes.get((ROW_COMBO["Tábua"], ROW_COMBO["Sexo Tábua"], ROW_COMBO["Sexo Pop."]))
         if mg is not None:
-            fig = grafico_oe_por_idade(mg, row_combo["Tábua"], row_combo["Sexo Tábua"], row_combo["Sexo Pop."])
+            fig = grafico_oe_por_idade(mg, ROW_COMBO["Tábua"], ROW_COMBO["Sexo Tábua"], ROW_COMBO["Sexo Pop."])
             if fig: st.pyplot(fig, use_container_width=True); plt.close(fig)
 
 with tab_chi:
-    if row_combo is not None:
-        df_g  = detalhes_grupos.get((row_combo["Tábua"], row_combo["Sexo Tábua"], row_combo["Sexo Pop."]), pd.DataFrame())
+    if ROW_COMBO is not None:
+        df_g  = detalhes_grupos.get((ROW_COMBO["Tábua"], ROW_COMBO["Sexo Tábua"], ROW_COMBO["Sexo Pop."]), pd.DataFrame())
         ng    = len(df_g) if df_g is not None and not df_g.empty else 0
         st.markdown(f"""<div class="info-box">
         <b>{ng} grupos</b> · mínimo {min_esp_chi2:.0f} esperados/grupo.
-        &nbsp; χ² = <b>{row_combo['χ² Stat']:.4f}</b> &nbsp;|&nbsp;
-        Crítico = <b>{row_combo['χ² Crítico']:.4f}</b> &nbsp;|&nbsp;
-        GL = <b>{int(row_combo['N Grupos χ²'])-1 if row_combo['N Grupos χ²'] and not np.isnan(row_combo['N Grupos χ²']) else '—'}</b>
-        &nbsp;|&nbsp; p = <b>{row_combo['χ² p-valor']:.4f}</b>
+        &nbsp; χ² = <b>{ROW_COMBO['χ² Stat']:.4f}</b> &nbsp;|&nbsp;
+        Crítico = <b>{ROW_COMBO['χ² Crítico']:.4f}</b> &nbsp;|&nbsp;
+        GL = <b>{int(ROW_COMBO['N Grupos χ²'])-1 if ROW_COMBO['N Grupos χ²'] and not np.isnan(ROW_COMBO['N Grupos χ²']) else '—'}</b>
+        &nbsp;|&nbsp; p = <b>{ROW_COMBO['χ² p-valor']:.4f}</b>
         </div>""", unsafe_allow_html=True)
         if df_g is not None and not df_g.empty and len(df_g)>=2:
             col_t, col_g = st.columns([1,2])
@@ -1052,17 +1068,17 @@ with tab_chi:
                      "expostos":"{:.1f}","(O-E)²/E":"{:.4f}"}
                 ), use_container_width=True, hide_index=True)
             with col_g:
-                fig_c = grafico_chi2_grupos(df_g, row_combo["χ² Stat"], row_combo["χ² Crítico"],
-                                            row_combo["Tábua"], row_combo["Sexo Tábua"], row_combo["Sexo Pop."])
+                fig_c = grafico_chi2_grupos(df_g, ROW_COMBO["χ² Stat"], ROW_COMBO["χ² Crítico"],
+                                            ROW_COMBO["Tábua"], ROW_COMBO["Sexo Tábua"], ROW_COMBO["Sexo Pop."])
                 if fig_c: st.pyplot(fig_c, use_container_width=True); plt.close(fig_c)
         else:
             st.info("Grupos insuficientes para esta combinação.")
 
 with tab_cdf:
-    if row_combo is not None:
-        mg_k  = merged_detalhes.get((row_combo["Tábua"], row_combo["Sexo Tábua"], row_combo["Sexo Pop."]))
+    if ROW_COMBO is not None:
+        mg_k  = merged_detalhes.get((ROW_COMBO["Tábua"], ROW_COMBO["Sexo Tábua"], ROW_COMBO["Sexo Pop."]))
         if mg_k is not None:
-            fig_k = grafico_cdf(mg_k, row_combo["Tábua"], row_combo["Sexo Tábua"], row_combo["Sexo Pop."])
+            fig_k = grafico_cdf(mg_k, ROW_COMBO["Tábua"], ROW_COMBO["Sexo Tábua"], ROW_COMBO["Sexo Pop."])
             if fig_k: st.pyplot(fig_k, use_container_width=True); plt.close(fig_k)
 
 with tab_rank:
@@ -1151,8 +1167,8 @@ with col_e2:
             for i, row_p in enumerate(data_r, 1):
                 n_ap = sum(row_p[cols_pdf.index(c)]=="Aprov."
                            for c in ("χ² Aprovado","KS Aprovado","Z Aprovado"))
-                bg = ("#f0fdf4" if n_ap==3 else "#fef2f2" if n_ap==0 else "#fffbeb")
-                cmds.append(("BACKGROUND",(0,i),(-1,i),rl_colors.HexColor(bg)))
+                BACKGROUND_COLOR = ("#f0fdf4" if n_ap==3 else "#fef2f2" if n_ap==0 else "#fffbeb")
+                cmds.append(("BACKGROUND",(0,i),(-1,i),rl_colors.HexColor(BACKGROUND_COLOR)))
             t.setStyle(TableStyle(cmds))
             story.append(t)
             doc.build(story)
