@@ -633,6 +633,12 @@ def grafico_heatmap_aprovacao(df_res: pd.DataFrame):
     siglas = ["χ²","KS","Z"]
     df     = df_res.copy()
     df["label"] = df.apply(lambda r: f"{r['Tábua']} ({r['Sexo Tábua']}→{r['Sexo Pop.']})", axis=1)
+    
+    st.write("TIPO:", type(df[testes]))
+    st.write("COLUNAS EXISTEM:", [c in df.columns for c in testes])
+    st.write("COLUNAS:", df.columns.tolist())
+
+    
     matrix = df[testes].applymap(lambda v: 1 if v is True else (0 if v is False else -1)).values
     cmap   = matplotlib.colors.ListedColormap(["#fee2e2","#d1fae5"])
     fig, ax = plt.subplots(figsize=(5, max(3, 0.46*len(df))))
