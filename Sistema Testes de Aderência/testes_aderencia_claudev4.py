@@ -633,13 +633,13 @@ def grafico_heatmap_aprovacao(df_res: pd.DataFrame):
     siglas = ["χ²","KS","Z"]
     df     = df_res.copy()
     df["label"] = df.apply(lambda r: f"{r['Tábua']} ({r['Sexo Tábua']}→{r['Sexo Pop.']})", axis=1)
-    
-    st.write("TIPO:", type(df[testes]))
-    st.write("COLUNAS EXISTEM:", [c in df.columns for c in testes])
-    st.write("COLUNAS:", df.columns.tolist())
-
-    
-    matrix = df[testes].applymap(lambda v: 1 if v is True else (0 if v is False else -1)).values
+    #matrix = df[testes].applymap(lambda v: 1 if v is True else (0 if v is False else -1)).values
+    matrix = (
+        df.reindex(columns=testes)
+        .replace({True: 1, False: 0})
+        .fillna(-1)
+        .values
+    )
     cmap   = matplotlib.colors.ListedColormap(["#fee2e2","#d1fae5"])
     fig, ax = plt.subplots(figsize=(5, max(3, 0.46*len(df))))
     ax.imshow(matrix, cmap=cmap, aspect="auto", vmin=0, vmax=1)
@@ -897,7 +897,7 @@ if arquivo_pop is None or arquivo_tabuas is None:
             "idade":[45,52],
             "expostos_M":[120.5,98.0], "ocorridos_M":[1,2],
             "expostos_F":[110.0,90.5], "ocorridos_F":[0,1],
-        }), use_container_width=True, hide_index=True)
+        }), width="stretch", hide_index=True)
     with c2:
         st.markdown('<div class="section-header">Formato — Tábuas</div>', unsafe_allow_html=True)
         st.dataframe(pd.DataFrame({
@@ -905,7 +905,7 @@ if arquivo_pop is None or arquivo_tabuas is None:
             "AT2000_M":[0.003241,0.003512,0.003800],
             "AT2000_F":[0.002100,0.002280,0.002470],
             "BR_EMSsb_M":[0.004102,0.004430,0.004780],
-        }), use_container_width=True, hide_index=True)
+        }), width="stretch", hide_index=True)
     st.stop()
 
 # ── Carregamento ─────────────────────────────────────────────────────────────
@@ -1048,7 +1048,7 @@ float_fmt = {c:"{:.4f}" for c in [
 
 st.dataframe(
     res_display.style.apply(colorir_linha, axis=1).format(float_fmt, na_rep="—"),
-    use_container_width=True, hide_index=True,
+    width="stretch", hide_index=True,
     height=min(40+38*len(res_display), 600),
 )
 
@@ -1107,7 +1107,7 @@ with tab_vis:
         mg = merged_detalhes.get((ROW_COMBO["Tábua"], ROW_COMBO["Sexo Tábua"], ROW_COMBO["Sexo Pop."]))
         if mg is not None:
             fig = grafico_oe_por_idade(mg, ROW_COMBO["Tábua"], ROW_COMBO["Sexo Tábua"], ROW_COMBO["Sexo Pop."])
-            if fig: st.pyplot(fig, use_container_width=True); plt.close(fig)
+            if fig: st.pyplot(fig, width="stretch"); plt.close(fig)
 
 with tab_chi:
     if ROW_COMBO is not None:
@@ -1129,11 +1129,11 @@ with tab_chi:
                 st.dataframe(df_show.style.format(
                     {"ocorridos":"{:.2f}","esperados":"{:.2f}",
                      "expostos":"{:.1f}","(O-E)²/E":"{:.4f}"}
-                ), use_container_width=True, hide_index=True)
+                ), width="stretch", hide_index=True)
             with col_g:
                 fig_c = grafico_chi2_grupos(df_g, ROW_COMBO["χ² Stat"], ROW_COMBO["χ² Crítico"],
                                             ROW_COMBO["Tábua"], ROW_COMBO["Sexo Tábua"], ROW_COMBO["Sexo Pop."])
-                if fig_c: st.pyplot(fig_c, use_container_width=True); plt.close(fig_c)
+                if fig_c: st.pyplot(fig_c, width="stretch"); plt.close(fig_c)
         else:
             st.info("Grupos insuficientes para esta combinação.")
 
@@ -1142,16 +1142,16 @@ with tab_cdf:
         mg_k  = merged_detalhes.get((ROW_COMBO["Tábua"], ROW_COMBO["Sexo Tábua"], ROW_COMBO["Sexo Pop."]))
         if mg_k is not None:
             fig_k = grafico_cdf(mg_k, ROW_COMBO["Tábua"], ROW_COMBO["Sexo Tábua"], ROW_COMBO["Sexo Pop."])
-            if fig_k: st.pyplot(fig_k, use_container_width=True); plt.close(fig_k)
+            if fig_k: st.pyplot(fig_k, width="stretch"); plt.close(fig_k)
 
 with tab_rank:
     col_r1, col_r2 = st.columns([1.6,1])
     with col_r1:
         fig_r = grafico_ranking_oe(res_exibir)
-        if fig_r: st.pyplot(fig_r, use_container_width=True); plt.close(fig_r)
+        if fig_r: st.pyplot(fig_r, width="stretch"); plt.close(fig_r)
     with col_r2:
         fig_h = grafico_heatmap_aprovacao(res_exibir)
-        if fig_h: st.pyplot(fig_h, use_container_width=True); plt.close(fig_h)
+        if fig_h: st.pyplot(fig_h, width="stretch"); plt.close(fig_h)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  EXPORTAÇÃO
@@ -1167,7 +1167,7 @@ with col_e1:
         data=excel_bytes,
         file_name=f"aderencia_{entidade_sel}_{plano_sel}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
+        width="stretch",
     )
     st.caption("Abas: Resumo Geral + uma aba por tábua (M / F / Total por seção, com detalhe por idade e grupos χ²)")
 
@@ -1241,7 +1241,7 @@ with col_e2:
                 data=buf_pdf.read(),
                 file_name=f"relatorio_aderencia_{entidade_sel}_{plano_sel}.pdf",
                 mime="application/pdf",
-                use_container_width=True,
+                width="stretch",
             )
         except Exception as exc:  # pylint: disable=broad-except
             st.warning(f"Erro ao gerar PDF: {exc}")
