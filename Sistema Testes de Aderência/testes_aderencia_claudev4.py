@@ -638,7 +638,9 @@ def grafico_heatmap_aprovacao(df_res: pd.DataFrame):
         df.reindex(columns=testes)
         .replace({True: 1, False: 0})
         .fillna(-1)
-        .values
+        .apply(pd.to_numeric, errors="coerce")
+        .fillna(-1)
+        .values.astype(int)
     )
     cmap   = matplotlib.colors.ListedColormap(["#fee2e2","#d1fae5"])
     fig, ax = plt.subplots(figsize=(5, max(3, 0.46*len(df))))
