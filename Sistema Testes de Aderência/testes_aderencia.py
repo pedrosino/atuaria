@@ -109,6 +109,13 @@ h1, h2, h3, h4 {
     font-size: 0.82rem;
     margin: 0.8rem 0;
 }
+.meta-line {
+    font-size: 0.72rem;
+    color: #94a3b8;
+    line-height: 1.75;
+    margin-top: -0.65rem;
+    margin-bottom: 1.1rem;
+}
 div[data-testid="stDataFrame"] { border-radius: 8px; overflow: hidden; }
 
 /* Sidebar compacta */
@@ -122,6 +129,9 @@ div[data-testid="stDataFrame"] { border-radius: 8px; overflow: hidden; }
 # ═══════════════════════════════════════════════════════════════════════════════
 #  CONSTANTES
 # ═══════════════════════════════════════════════════════════════════════════════
+
+__version__ = "1.0.0"
+__contact__ = "pedrosino@gmail.com"
 
 SEXOS = ("M", "F")
 LABEL_SEXO = {"M": "Masculino", "F": "Feminino"}
@@ -847,6 +857,10 @@ def colorir_linha(row):
 with st.sidebar:
     st.markdown('<div class="main-title">⚖️ Aderência</div>', unsafe_allow_html=True)
     st.markdown('<div class="sub-title">Tábuas de Mortalidade</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="meta-line"><b>Versão</b> {__version__}<br><b>Contato</b> {__contact__}</div>',
+        unsafe_allow_html=True,
+    )
     st.divider()
 
     st.markdown("#### 📂 Dados de entrada")
@@ -884,6 +898,10 @@ with st.sidebar:
 st.markdown('<div class="main-title">Aderência de Tábuas de Mortalidade</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-title">Qui-quadrado com agrupamento dinâmico · Kolmogorov-Smirnov · Teste Z bilateral</div>',
             unsafe_allow_html=True)
+st.markdown(
+    f'<div class="meta-line"><b>Versão</b> {__version__} · <b>Contato</b> {__contact__}</div>',
+    unsafe_allow_html=True,
+)
 
 # ── Tela de boas-vindas ──────────────────────────────────────────────────────
 if arquivo_pop is None or arquivo_tabuas is None:
