@@ -110,8 +110,8 @@ h1, h2, h3, h4 {
     margin: 0.8rem 0;
 }
 .meta-line {
-    font-size: 0.72rem;
-    color: #94a3b8;
+    font-size: 0.75rem;
+    color: #1d56a7;
     line-height: 1.75;
     margin-top: -0.65rem;
     margin-bottom: 1.1rem;
@@ -307,6 +307,8 @@ def calcular_esperados(pop_df: pd.DataFrame, tabua_df: pd.DataFrame) -> pd.DataF
     """Calcula os esperados de acordo com a tábua de mortalidade e a população."""
     merged = pop_df.merge(tabua_df[["idade","qx"]], on="idade", how="left")
     merged["esperados"] = merged["expostos"] * merged["qx"]
+    q = merged["qx"].clip(upper=0.9999)
+    merged["var_z"] = merged["expostos"] * q * (1 - q)
     return merged
 
 
@@ -355,7 +357,7 @@ def agrupar_idades(df: pd.DataFrame, min_esp: float) -> pd.DataFrame:
 
 def teste_qui_quadrado(df_merged, min_esp, alpha):
     """Teste de Qui-quadrado para verificar a adequação da tábua de mortalidade."""
-    df_v = df_merged.dropna(subset=["qx"])
+    df_v = df_merged.dropna(subset=["esperados"])
     df_v = df_v[df_v["esperados"] > 0]
     if df_v.empty:
         return np.nan, np.nan, np.nan, None, 0, pd.DataFrame()
@@ -372,7 +374,7 @@ def teste_qui_quadrado(df_merged, min_esp, alpha):
 
 def teste_ks(df_merged, alpha):
     """Teste de Kolmogorov-Smirnov para verificar a adequação da tábua de mortalidade."""
-    df_v = df_merged.dropna(subset=["qx"]).sort_values("idade")
+    df_v = df_merged.dropna(subset=["esperados"]).sort_values("idade")
     ocorridos, esperados = df_v["ocorridos"].values.astype(float), df_v["esperados"].values.astype(float)
     tot_o, tot_e = ocorridos.sum(), esperados.sum()
     if tot_o == 0 or tot_e == 0:
@@ -394,8 +396,11 @@ def teste_z_binomial(df_merged, alpha):
     df_v = df_v[df_v["expostos"] > 0]
     if df_v.empty:
         return np.nan, np.nan, np.nan, None, None
-    q    = df_v["qx"].clip(upper=0.9999)
-    var  = (df_v["expostos"] * q * (1 - q)).sum()
+    if "var_z" in df_v.columns:
+        var = float(df_v["var_z"].sum())
+    else:
+        q   = df_v["qx"].clip(upper=0.9999)
+        var = float((df_v["expostos"] * q * (1 - q)).sum())
     if var <= 0:
         return np.nan, np.nan, np.nan, None, None
     ocorridos_total, esperados_total = df_v["ocorridos"].sum(), df_v["esperados"].sum()
@@ -448,6 +453,7 @@ def rodar_todos_testes(
     alpha_z:    float = 0.05,
     min_esp_chi2: float = 5.0,
     fatores_agravo: dict | None = None,
+    total_pareado_mf: bool = True,
 ):
     """
     Retorna (df_resultados, detalhes_grupos, merged_detalhes).
@@ -460,6 +466,43 @@ def rodar_todos_testes(
 
     for nome_tabua in tabua_df["nome"].unique():
         tb = tabua_df[tabua_df["nome"] == nome_tabua]
+        # ── Total combinado (M aplicado em M, F aplicado em F) ─────────────────
+        if total_pareado_mf and {"M", "F"}.issubset(set(tb["sexo"].unique())):
+            merges_pareado = []
+            for sx in ("M", "F"):
+                pop_sx = pop_df[pop_df["sexo"] == sx].copy()
+                if pop_sx.empty:
+                    continue
+                tb_sx = tb[tb["sexo"] == sx].copy()
+                fator = fatores_agravo.get((nome_tabua, sx), 1.0)
+                tb_sx["qx"] = (tb_sx["qx"] * fator).clip(upper=1.0)
+
+                mg = calcular_esperados(pop_sx, tb_sx)
+                mg = mg.dropna(subset=["qx"])
+                if mg.empty:
+                    continue
+                merges_pareado.append(mg)
+
+            if merges_pareado:
+                mg_concat = pd.concat(merges_pareado, ignore_index=True)
+                mg_total = (mg_concat
+                            .groupby("idade", as_index=False)
+                            .agg(
+                                expostos=("expostos", "sum"),
+                                ocorridos=("ocorridos", "sum"),
+                                esperados=("esperados", "sum"),
+                                var_z=("var_z", "sum"),
+                            ))
+                mg_total["qx"] = np.nan
+
+                merged_detalhes[(nome_tabua, "M+F", "Total")] = mg_total
+                row_t, df_g_t = _testar_merged(
+                    mg_total, min_esp_chi2, alpha_chi2, alpha_ks, alpha_z)
+                detalhes_grupos[(nome_tabua, "M+F", "Total")] = df_g_t
+                resultados.append({
+                    "Tábua": nome_tabua, "Sexo Tábua": "M+F",
+                    "Sexo Pop.": "Total", "Fator qx": np.nan, **row_t})
+
         for sexo_tabua in tb["sexo"].unique():
             fator = fatores_agravo.get((nome_tabua, sexo_tabua), 1.0)
             tb_sx = tb[tb["sexo"] == sexo_tabua].copy()
@@ -498,8 +541,9 @@ def rodar_todos_testes(
                                 expostos =("expostos",  "sum"),
                                 ocorridos=("ocorridos", "sum"),
                                 esperados=("esperados", "sum"),
-                                qx       =("qx",        "mean"),  # usado só no teste Z
+                                var_z    =("var_z",     "sum"),
                             ))
+                mg_total["qx"] = np.nan
                 merged_detalhes[(nome_tabua, sexo_tabua, "Total")] = mg_total
                 row_t, df_g_t = _testar_merged(
                     mg_total, min_esp_chi2, alpha_chi2, alpha_ks, alpha_z)
@@ -536,8 +580,9 @@ def _style(ax, title="", xlabel="", ylabel=""):
 
 def grafico_oe_por_idade(merged, nome_tabua, sxt, sxp):
     """Gráfico de óbitos ocorridos e esperados por idade."""
-    df = merged.dropna(subset=["qx"]).sort_values("idade")
-    if df.empty: return None
+    df = merged.dropna(subset=["esperados"]).sort_values("idade")
+    if df.empty:
+        return None
     idades = df["idade"].astype(int).values
     ocorridos = df["ocorridos"].values
     esperados = df["esperados"].values
@@ -564,7 +609,7 @@ def grafico_oe_por_idade(merged, nome_tabua, sxt, sxp):
 
 def grafico_cdf(merged, nome_tabua, sxt, sxp):
     """Gráfico de distribuição acumulada (CDF) dos óbitos e esperados."""
-    df = merged.dropna(subset=["qx"]).sort_values("idade")
+    df = merged.dropna(subset=["esperados"]).sort_values("idade")
     if df.empty:
         return None
     ocorridos = df["ocorridos"].values.astype(float)
@@ -1023,6 +1068,17 @@ with col_exp:
                 '<div style="margin-top:0.4rem;font-size:0.8rem;line-height:2;">'
                 "Ativos: " + " &nbsp;|&nbsp; ".join(partes) + "</div>", unsafe_allow_html=True)
 
+# ── Opções de agregação ────────────────────────────────────────────────────────
+st.markdown('<div class="section-header">🧩 Agregação para testes</div>', unsafe_allow_html=True)
+total_pareado_mf = st.checkbox(
+    "Calcular também o Total combinado (M com tábua M + F com tábua F) e testar no agregado",
+    value=True,
+    help=(
+        "Útil quando você quer a tábua feminina aplicada só na população feminina e a tábua masculina "
+        "só na masculina; depois soma esperados e ocorridos por idade e aplica os testes."
+    ),
+)
+
 # ── Executar testes ───────────────────────────────────────────────────────────
 with st.spinner("Calculando testes de aderência..."):
     resultados, detalhes_grupos, merged_detalhes = rodar_todos_testes(
@@ -1030,6 +1086,7 @@ with st.spinner("Calculando testes de aderência..."):
         alpha_chi2=alpha_chi2, alpha_ks=alpha_ks, alpha_z=alpha_z,
         min_esp_chi2=min_esp_chi2,
         fatores_agravo=fatores_agravo,
+        total_pareado_mf=total_pareado_mf,
     )
 
 if resultados.empty:
