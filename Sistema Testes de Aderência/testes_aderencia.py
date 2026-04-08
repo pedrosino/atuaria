@@ -556,6 +556,47 @@ def rodar_todos_testes(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  CACHE (evita recomputar em mudanças de UI)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _fatores_agravo_key(fatores_agravo: dict) -> tuple[tuple[str, str, float], ...]:
+    """
+    Normaliza o dicionário de fatores para uma chave hashável e determinística.
+    Isso impede recomputação quando só a ordem do dict muda.
+    """
+    if not fatores_agravo:
+        return tuple()
+    items: list[tuple[str, str, float]] = []
+    for (nome_tabua, sexo_tabua), fator in fatores_agravo.items():
+        items.append((str(nome_tabua), str(sexo_tabua), float(fator)))
+    return tuple(sorted(items))
+
+
+@st.cache_data(show_spinner=False)
+def _rodar_todos_testes_cached(
+    pop_df: pd.DataFrame,
+    tabua_df: pd.DataFrame,
+    alpha_chi2: float,
+    alpha_ks: float,
+    alpha_z: float,
+    min_esp_chi2: float,
+    fatores_key: tuple[tuple[str, str, float], ...],
+    total_pareado_mf: bool,
+):
+    fatores_agravo = {(n, s): f for (n, s, f) in fatores_key}
+    return rodar_todos_testes(
+        pop_df,
+        tabua_df,
+        alpha_chi2=alpha_chi2,
+        alpha_ks=alpha_ks,
+        alpha_z=alpha_z,
+        min_esp_chi2=min_esp_chi2,
+        fatores_agravo=fatores_agravo,
+        total_pareado_mf=total_pareado_mf,
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  GRÁFICOS
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1081,11 +1122,15 @@ total_pareado_mf = st.checkbox(
 
 # ── Executar testes ───────────────────────────────────────────────────────────
 with st.spinner("Calculando testes de aderência..."):
-    resultados, detalhes_grupos, merged_detalhes = rodar_todos_testes(
-        pop_filtrada, tabua_df,
-        alpha_chi2=alpha_chi2, alpha_ks=alpha_ks, alpha_z=alpha_z,
+    fatores_key = _fatores_agravo_key(fatores_agravo)
+    resultados, detalhes_grupos, merged_detalhes = _rodar_todos_testes_cached(
+        pop_filtrada,
+        tabua_df,
+        alpha_chi2=alpha_chi2,
+        alpha_ks=alpha_ks,
+        alpha_z=alpha_z,
         min_esp_chi2=min_esp_chi2,
-        fatores_agravo=fatores_agravo,
+        fatores_key=fatores_key,
         total_pareado_mf=total_pareado_mf,
     )
 
