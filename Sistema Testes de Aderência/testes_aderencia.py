@@ -810,39 +810,65 @@ def _ordenar_colunas_resumo_geral(df: pd.DataFrame) -> pd.DataFrame:
     return df[existentes + extras]
 
 
+_EXPORT_POP_ORDER = ("M", "F", "Total")
+_EXPORT_TAB_ORDER = ("M", "F", "M+F")
+
+
 def gerar_excel(
     resultados: pd.DataFrame,
     detalhes_grupos: dict,
     merged_detalhes: dict,
+    *,
+    sexos_pop_incluir: set[str] | None = None,
+    sexos_tabua_incluir: set[str] | None = None,
 ) -> bytes:
-    resultados = _adicionar_rankings_escores(resultados)
+    """
+    sexos_pop_incluir / sexos_tabua_incluir: se None, exporta tudo; caso contrário, só linhas que
+    coincidem com os conjuntos (útil para omitir sexos/tipos de agregação que não interessam).
+    """
+    res_base = resultados.copy()
+    if sexos_pop_incluir is not None:
+        res_base = res_base[res_base["Sexo Pop."].isin(sexos_pop_incluir)]
+    if sexos_tabua_incluir is not None:
+        res_base = res_base[res_base["Sexo Tábua"].isin(sexos_tabua_incluir)]
+
+    res_ranked = _adicionar_rankings_escores(res_base)
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
 
         # ── Aba: Resumo geral ────────────────────────────────────────────────
-        res = resultados.copy()
+        res = res_ranked.copy()
         for col in ("χ² Aprovado","KS Aprovado","Z Aprovado"):
             res[col] = res[col].apply(_ap_str)
         res = _ordenar_colunas_resumo_geral(res)
         res.to_excel(writer, sheet_name="Resumo Geral", index=False)
 
         # ── Uma aba por tábua ────────────────────────────────────────────────
-        tabuas = resultados["Tábua"].unique()
+        tabuas = res_ranked["Tábua"].unique()
         for nome_tabua in tabuas:
             sheet_name = str(nome_tabua)[:31]
             rows_sheet  = []   # linhas que serão escritas
 
-            for sexo_tabua in resultados.loc[
-                    resultados["Tábua"]==nome_tabua, "Sexo Tábua"].unique():
+            seen_tab = res_ranked.loc[res_ranked["Tábua"] == nome_tabua, "Sexo Tábua"].unique()
+            order_tab = [x for x in _EXPORT_TAB_ORDER if x in seen_tab]
+            order_tab += sorted(x for x in seen_tab if x not in _EXPORT_TAB_ORDER)
 
-                for sexo_pop in ("M","F","Total"):
+            for sexo_tabua in order_tab:
+                pops_here = res_ranked.loc[
+                    (res_ranked["Tábua"] == nome_tabua) & (res_ranked["Sexo Tábua"] == sexo_tabua),
+                    "Sexo Pop.",
+                ].unique()
+                order_pop = [x for x in _EXPORT_POP_ORDER if x in pops_here]
+                order_pop += sorted(x for x in pops_here if x not in _EXPORT_POP_ORDER)
+
+                for sexo_pop in order_pop:
                     key = (nome_tabua, sexo_tabua, sexo_pop)
                     mg  = merged_detalhes.get(key)
                     df_g = detalhes_grupos.get(key)
-                    row_res = resultados[
-                        (resultados["Tábua"]==nome_tabua) &
-                        (resultados["Sexo Tábua"]==sexo_tabua) &
-                        (resultados["Sexo Pop."]==sexo_pop)
+                    row_res = res_ranked[
+                        (res_ranked["Tábua"]==nome_tabua) &
+                        (res_ranked["Sexo Tábua"]==sexo_tabua) &
+                        (res_ranked["Sexo Pop."]==sexo_pop)
                     ]
 
                     if mg is None or row_res.empty:
@@ -1281,91 +1307,168 @@ with tab_rank:
 
 st.markdown('<div class="section-header">Exportar resultados</div>', unsafe_allow_html=True)
 
+_pops_export = sorted(
+    resultados["Sexo Pop."].dropna().unique().tolist(),
+    key=lambda x: _EXPORT_POP_ORDER.index(x) if x in _EXPORT_POP_ORDER else 99,
+)
+_tabs_export = sorted(
+    resultados["Sexo Tábua"].dropna().unique().tolist(),
+    key=lambda x: _EXPORT_TAB_ORDER.index(x) if x in _EXPORT_TAB_ORDER else 99,
+)
+_LBL_POP_EXPORT = {
+    "M": "População masculina",
+    "F": "População feminina",
+    "Total": "Total (agregado M+F com a mesma tábua/sexo)",
+}
+_LBL_TAB_EXPORT = {
+    "M": "Tábua masculina (por sexo)",
+    "F": "Tábua feminina (por sexo)",
+    "M+F": "Combinado M+F (tábua M na pop. M + tábua F na pop. F)",
+}
+
+with st.expander("Filtros do Excel / PDF — linhas da tabela a exportar", expanded=False):
+    st.caption(
+        "A análise continua sendo da entidade/plano selecionados acima; aqui você escolhe "
+        "quais linhas do resumo (combinações sexo da tábua × sexo da população) entram no arquivo."
+    )
+    f1, f2 = st.columns(2)
+    _inc_pop = {}
+    with f1:
+        st.markdown("**Sexo da população**")
+        for sp in _pops_export:
+            _inc_pop[sp] = st.checkbox(
+                _LBL_POP_EXPORT.get(sp, str(sp)),
+                value=True,
+                key=f"export_inc_pop_{sp}",
+            )
+    _inc_tab = {}
+    with f2:
+        st.markdown("**Sexo / tipo da tábua**")
+        for stb in _tabs_export:
+            _inc_tab[stb] = st.checkbox(
+                _LBL_TAB_EXPORT.get(stb, str(stb)),
+                value=True,
+                key=f"export_inc_tab_{stb}",
+            )
+
+_set_pop_exp = {k for k, v in _inc_pop.items() if v}
+_set_tab_exp = {k for k, v in _inc_tab.items() if v}
+_export_mask = (
+    resultados["Sexo Pop."].isin(_set_pop_exp)
+    & resultados["Sexo Tábua"].isin(_set_tab_exp)
+)
+resultados_export = resultados.loc[_export_mask].copy()
+_export_ok = bool(_set_pop_exp and _set_tab_exp and not resultados_export.empty)
+
+_sp_all = set(_pops_export)
+_st_all = set(_tabs_export)
+_kw_excel = {}
+if _set_pop_exp != _sp_all:
+    _kw_excel["sexos_pop_incluir"] = _set_pop_exp
+if _set_tab_exp != _st_all:
+    _kw_excel["sexos_tabua_incluir"] = _set_tab_exp
+
 col_e1, col_e2 = st.columns(2)
 with col_e1:
-    excel_bytes = gerar_excel(resultados, detalhes_grupos, merged_detalhes)
+    if _export_ok:
+        excel_bytes = gerar_excel(
+            resultados, detalhes_grupos, merged_detalhes, **_kw_excel)
+    else:
+        excel_bytes = b""
+        if not (_set_pop_exp and _set_tab_exp):
+            st.warning("Marque ao menos uma opção em cada grupo para exportar.")
+        elif resultados_export.empty:
+            st.warning("Nenhuma linha corresponde aos filtros; ajuste as caixas de seleção.")
+
     st.download_button(
         label="📥 Baixar planilha Excel",
         data=excel_bytes,
         file_name=f"aderencia_{entidade_sel}_{plano_sel}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         width="stretch",
+        disabled=not _export_ok,
     )
-    st.caption("Abas: Resumo Geral + uma aba por tábua (M / F / Total por seção, com detalhe por idade e grupos χ²)")
+    st.caption(
+        "Abas: Resumo Geral (filtrado) + uma aba por tábua; rankings/escores no Excel "
+        "recalculados só sobre as linhas exportadas."
+    )
 
 with col_e2:
     if REPORTLAB_OK:
-        # PDF simplificado — usa apenas df resumo
-        try:
-            buf_pdf = io.BytesIO()
-            doc = SimpleDocTemplate(buf_pdf, pagesize=landscape(A4),
-                                    rightMargin=1.5*cm, leftMargin=1.5*cm,
-                                    topMargin=2*cm, bottomMargin=2*cm)
-            sty = getSampleStyleSheet()
-            ts  = ParagraphStyle("t", parent=sty["Title"], fontSize=13,
-                                 textColor=rl_colors.HexColor("#0f172a"), spaceAfter=4)
-            ss  = ParagraphStyle("s", parent=sty["Normal"], fontSize=9,
-                                 textColor=rl_colors.HexColor("#64748b"), spaceAfter=3)
-            hs  = ParagraphStyle("h", parent=sty["Heading2"], fontSize=10,
-                                 textColor=rl_colors.HexColor("#1e40af"), spaceAfter=3)
-            story = [
-                Paragraph("Relatório de Aderência de Tábuas de Mortalidade", ts),
-                Paragraph(f"Entidade: {entidade_sel}  |  Plano: {plano_sel}  |  "
-                          f"α χ²={int(alpha_chi2*100)}%  KS={int(alpha_ks*100)}%  Z={int(alpha_z*100)}%", ss),
-                HRFlowable(width="100%", thickness=1, color=rl_colors.HexColor("#e2e8f0")),
-                Spacer(1, 0.3*cm), Paragraph("Resultados por Combinação", hs),
-            ]
-            cols_pdf = ["Tábua","Sexo Tábua","Sexo Pop.","Fator qx","Expostos",
-                        "Ocorridos","Esperados","Razão O/E",
-                        "χ² Stat","χ² p-valor","χ² Aprovado",
-                        "KS Stat","KS p-valor","KS Aprovado",
-                        "Z Stat","Z p-valor","Z Aprovado","Z Direção"]
-            header = cols_pdf
-            data_r = []
-            for _, r in resultados.iterrows():
-                row_p = []
-                for c in cols_pdf:
-                    v = r[c]
-                    if c in ("χ² Aprovado","KS Aprovado","Z Aprovado"):
-                        row_p.append("Aprov." if v is True else ("Reprov." if v is False else "—"))
-                    elif isinstance(v,float) and np.isnan(v): row_p.append("—")
-                    elif isinstance(v,float): row_p.append(f"{v:.4f}")
-                    else: row_p.append(str(v))
-                data_r.append(row_p)
-            cw_pdf = [3.5*cm,1.3*cm,1.3*cm,1.5*cm,2*cm,
-                      1.8*cm,1.8*cm,1.6*cm,
-                      1.6*cm,1.8*cm,1.9*cm,
-                      1.6*cm,1.8*cm,1.9*cm,
-                      1.6*cm,1.8*cm,1.9*cm,1.5*cm]
-            t = Table([header]+data_r, colWidths=cw_pdf, repeatRows=1)
-            cmds = [
-                ("BACKGROUND",(0,0),(-1,0),rl_colors.HexColor("#0f172a")),
-                ("TEXTCOLOR", (0,0),(-1,0),rl_colors.white),
-                ("FONTNAME",  (0,0),(-1,0),"Helvetica-Bold"),
-                ("FONTSIZE",  (0,0),(-1,-1),6.5),
-                ("ALIGN",     (0,0),(-1,-1),"CENTER"),
-                ("VALIGN",    (0,0),(-1,-1),"MIDDLE"),
-                ("BOX",       (0,0),(-1,-1),0.5,rl_colors.HexColor("#e2e8f0")),
-                ("INNERGRID", (0,0),(-1,-1),0.25,rl_colors.HexColor("#e2e8f0")),
-                ("TOPPADDING",(0,0),(-1,-1),3),("BOTTOMPADDING",(0,0),(-1,-1),3),
-            ]
-            for i, row_p in enumerate(data_r, 1):
-                n_ap = sum(row_p[cols_pdf.index(c)]=="Aprov."
-                           for c in ("χ² Aprovado","KS Aprovado","Z Aprovado"))
-                BACKGROUND_COLOR = ("#f0fdf4" if n_ap==3 else "#fef2f2" if n_ap==0 else "#fffbeb")
-                cmds.append(("BACKGROUND",(0,i),(-1,i),rl_colors.HexColor(BACKGROUND_COLOR)))
-            t.setStyle(TableStyle(cmds))
-            story.append(t)
-            doc.build(story)
-            buf_pdf.seek(0)
-            st.download_button(
-                label="📄 Baixar relatório PDF",
-                data=buf_pdf.read(),
-                file_name=f"relatorio_aderencia_{entidade_sel}_{plano_sel}.pdf",
-                mime="application/pdf",
-                width="stretch",
-            )
-        except Exception as exc:  # pylint: disable=broad-except
-            st.warning(f"Erro ao gerar PDF: {exc}")
+        pdf_bytes = b""
+        if _export_ok:
+            try:
+                buf_pdf = io.BytesIO()
+                doc = SimpleDocTemplate(buf_pdf, pagesize=landscape(A4),
+                                        rightMargin=1.5*cm, leftMargin=1.5*cm,
+                                        topMargin=2*cm, bottomMargin=2*cm)
+                sty = getSampleStyleSheet()
+                ts  = ParagraphStyle("t", parent=sty["Title"], fontSize=13,
+                                     textColor=rl_colors.HexColor("#0f172a"), spaceAfter=4)
+                ss  = ParagraphStyle("s", parent=sty["Normal"], fontSize=9,
+                                     textColor=rl_colors.HexColor("#64748b"), spaceAfter=3)
+                hs  = ParagraphStyle("h", parent=sty["Heading2"], fontSize=10,
+                                     textColor=rl_colors.HexColor("#1e40af"), spaceAfter=3)
+                story = [
+                    Paragraph("Relatório de Aderência de Tábuas de Mortalidade", ts),
+                    Paragraph(f"Entidade: {entidade_sel}  |  Plano: {plano_sel}  |  "
+                              f"α χ²={int(alpha_chi2*100)}%  KS={int(alpha_ks*100)}%  Z={int(alpha_z*100)}%", ss),
+                    HRFlowable(width="100%", thickness=1, color=rl_colors.HexColor("#e2e8f0")),
+                    Spacer(1, 0.3*cm), Paragraph("Resultados por Combinação", hs),
+                ]
+                cols_pdf = ["Tábua","Sexo Tábua","Sexo Pop.","Fator qx","Expostos",
+                            "Ocorridos","Esperados","Razão O/E",
+                            "χ² Stat","χ² p-valor","χ² Aprovado",
+                            "KS Stat","KS p-valor","KS Aprovado",
+                            "Z Stat","Z p-valor","Z Aprovado","Z Direção"]
+                header = cols_pdf
+                data_r = []
+                for _, r in resultados_export.iterrows():
+                    row_p = []
+                    for c in cols_pdf:
+                        v = r[c]
+                        if c in ("χ² Aprovado","KS Aprovado","Z Aprovado"):
+                            row_p.append("Aprov." if v is True else ("Reprov." if v is False else "—"))
+                        elif isinstance(v,float) and np.isnan(v): row_p.append("—")
+                        elif isinstance(v,float): row_p.append(f"{v:.4f}")
+                        else: row_p.append(str(v))
+                    data_r.append(row_p)
+                cw_pdf = [3.5*cm,1.3*cm,1.3*cm,1.5*cm,2*cm,
+                          1.8*cm,1.8*cm,1.6*cm,
+                          1.6*cm,1.8*cm,1.9*cm,
+                          1.6*cm,1.8*cm,1.9*cm,
+                          1.6*cm,1.8*cm,1.9*cm,1.5*cm]
+                t = Table([header]+data_r, colWidths=cw_pdf, repeatRows=1)
+                cmds = [
+                    ("BACKGROUND",(0,0),(-1,0),rl_colors.HexColor("#0f172a")),
+                    ("TEXTCOLOR", (0,0),(-1,0),rl_colors.white),
+                    ("FONTNAME",  (0,0),(-1,0),"Helvetica-Bold"),
+                    ("FONTSIZE",  (0,0),(-1,-1),6.5),
+                    ("ALIGN",     (0,0),(-1,-1),"CENTER"),
+                    ("VALIGN",    (0,0),(-1,-1),"MIDDLE"),
+                    ("BOX",       (0,0),(-1,-1),0.5,rl_colors.HexColor("#e2e8f0")),
+                    ("INNERGRID", (0,0),(-1,-1),0.25, rl_colors.HexColor("#e2e8f0")),
+                    ("TOPPADDING",(0,0),(-1,-1),3),("BOTTOMPADDING",(0,0),(-1,-1),3),
+                ]
+                for i, row_p in enumerate(data_r, 1):
+                    n_ap = sum(row_p[cols_pdf.index(c)]=="Aprov."
+                               for c in ("χ² Aprovado","KS Aprovado","Z Aprovado"))
+                    BACKGROUND_COLOR = ("#f0fdf4" if n_ap==3 else "#fef2f2" if n_ap==0 else "#fffbeb")
+                    cmds.append(("BACKGROUND",(0,i),(-1,i),rl_colors.HexColor(BACKGROUND_COLOR)))
+                t.setStyle(TableStyle(cmds))
+                story.append(t)
+                doc.build(story)
+                buf_pdf.seek(0)
+                pdf_bytes = buf_pdf.read()
+            except Exception as exc:  # pylint: disable=broad-except
+                st.warning(f"Erro ao gerar PDF: {exc}")
+        st.download_button(
+            label="📄 Baixar relatório PDF",
+            data=pdf_bytes,
+            file_name=f"relatorio_aderencia_{entidade_sel}_{plano_sel}.pdf",
+            mime="application/pdf",
+            width="stretch",
+            disabled=not _export_ok or len(pdf_bytes) == 0,
+        )
     else:
         st.info("Instale `reportlab` para habilitar o relatório PDF.")
